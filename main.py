@@ -6,6 +6,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from setting import Config, InfoUser
 from loguru import logger
+import random
 import time
 
 
@@ -26,16 +27,24 @@ class Pc12306:
             k, v = i.split('=')
             self.driver.add_cookie({'name': k.strip(), 'value': v})
         self.driver.get(self.config.personal_url)
-        try:
-            WebDriverWait(self.driver, 10).until(EC.url_to_be(self.config.personal_url))
-        except Exception as e:
-            logger.warning("Login Fail, Loading Error")
+
+        time.sleep(1)
+        if self.driver.current_url == self.config.personal_url:
+            logger.info("Login Success")
+            return True
+        else:
+            logger.error("Loading Error")
             return False
-        if '欢迎登录12306'in self.driver.page_source:
-            logger.warning("Cookie Invalid, Login Fail")
-            return False
-        logger.info("Use Cookie Login Success")
-        return True
+        # try:
+        #     WebDriverWait(self.driver, 10).until(EC.url_to_be(self.config.personal_url))
+        # except Exception as e:
+        #     logger.warning("Login Fail, Loading Error")
+        #     return False
+        # if '欢迎登录12306'in self.driver.page_source:
+        #     logger.warning("Cookie Invalid, Login Fail")
+        #     return False
+        # logger.info("Use Cookie Login Success")
+        # return True
 
     def login(self):
         """
@@ -46,7 +55,8 @@ class Pc12306:
         
         # 进入登入页面
         self.driver.get(self.config.login_url)
-        WebDriverWait(self.driver, 10).until(EC.url_to_be(self.config.login_url))
+        WebDriverWait(self.driver, 10, 0.5).until(EC.url_to_be(self.config.login_url))
+        self.driver.maximize_window()
 
         # 通过反扒机制(防止滑动验证码有可能显示失败)
         script = 'Object.defineProperty(navigator,"webdriver",{get:() => false,});'
@@ -57,30 +67,32 @@ class Pc12306:
         self.driver.find_element(By.ID, "J-password").send_keys(self.user_info.password)
 
         # 点击登录
-        WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.ID, "J-login")))
+        WebDriverWait(self.driver, 5, 0.5).until(EC.element_to_be_clickable((By.ID, "J-login")))
         self.driver.find_element(By.ID, "J-login").click()
 
         # 滑块验证处理
         try:
-            WebDriverWait(self.driver, 10, 0.5).until(EC.presence_of_element_located((By.ID, "nc_1_n1z")))
+            WebDriverWait(self.driver, 5, 0.5).until(EC.presence_of_element_located((By.ID, "nc_1_n1z")))
         except Exception as e:
             logger.error('加载验证码出错')
         if '点击刷新' in self.driver.page_source:
             self.driver.find_element(By.XPATH, '//*[@id="J-slide-passcode"]/div/span[1]/a[1]').click()
-        slide = self.driver.find_element(By.ID,"nc_1_n1z")
-        ActionChains(self.driver).click_and_hold(slide).move_by_offset(380,0).release().perform()
+        
+        # 存在无需验证码也能成功登录的情况
+        try:
+            slide = self.driver.find_element(By.ID,"nc_1_n1z")
+            ActionChains(self.driver).click_and_hold(slide).move_by_offset(380,0).release().perform()
+        except Exception as e:
+            pass
 
         # 判断是否登录成功
-        try:
-            WebDriverWait(self.driver, 10).until(EC.url_to_be(self.config.personal_url))
-        except Exception as e:
+        time.sleep(1)
+        if self.driver.current_url == self.config.personal_url:
+            logger.info("Login Success")
+            return True
+        else:
             logger.error("Loading Error")
             return False
-        if '欢迎登录12306'in self.driver.page_source:
-            logger.error("Login Fail")
-            return False
-        logger.info("Login Success")
-        return True
     
     def info_select(self):
         """
@@ -88,7 +100,7 @@ class Pc12306:
         """
         # 进入车票查询页
         self.driver.get(self.config.left_ticket_url)
-        WebDriverWait(self.driver, 10).until(EC.url_to_be(self.config.left_ticket_url))
+        WebDriverWait(self.driver, 10, 0.5).until(EC.url_to_be(self.config.left_ticket_url))
 
         #出发地输入
         self.driver.find_element(By.ID,'fromStationText').click()
@@ -103,11 +115,11 @@ class Pc12306:
         self.driver.find_element(By.ID,'train_date').send_keys(self.user_info.depart_time)
 
         # 点击查询
-        WebDriverWait(self.driver,10).until(EC.element_to_be_clickable((By.ID,"query_ticket")))
+        WebDriverWait(self.driver, 5 , 0.5).until(EC.element_to_be_clickable((By.ID,"query_ticket")))
         self.driver.find_element(By.ID,'query_ticket').click()
 
         # 等待查询加载完毕
-        WebDriverWait(self.driver,20).until(EC.presence_of_element_located((By.XPATH, ".//tbody[@id='queryLeftTable']/tr")))
+        WebDriverWait(self.driver,10, 0.5).until(EC.presence_of_element_located((By.XPATH, ".//tbody[@id='queryLeftTable']/tr")))
 
         # 获取车票列表
         tr_list = self.driver.find_elements(By.XPATH,".//tbody[@id='queryLeftTable']/tr[not(@datatran)]")
@@ -129,14 +141,22 @@ class Pc12306:
                 continue
             if train_number not in self.user_info.trains:
                 continue
-            left_ticker_td = tr.find_element(By.XPATH,'.//td[4]').text
+
+            # 目标座位类型是否有票
+            if self.user_info.trains[train_number] == 'hard sleeper':
+                td_index = 8
+            elif self.user_info.trains[train_number] == 'second class':
+                td_index = 4
+            else:
+                td_index = 4
+            left_ticker_td = tr.find_element(By.XPATH,f'.//td[{td_index}]').text
+            logger.info(f"车次 {train_number} 状态: {left_ticker_td}")
             if left_ticker_td == '有' or left_ticker_td.isdigit():
-                logger.info(train_number + '有票')
                 btn72 = tr.find_element(By.CLASS_NAME,'btn72')
                 btn72.click()
 
                 # 完善乘客信息
-                WebDriverWait(self.driver,10).until(EC.presence_of_element_located((By.XPATH,".//ul[@id='normal_passenger_id']/li")))
+                WebDriverWait(self.driver, 5 , 0.5).until(EC.presence_of_element_located((By.XPATH,".//ul[@id='normal_passenger_id']/li")))
                 passenger_labels = self.driver.find_elements(By.XPATH,".//ul[@id='normal_passenger_id']/li/label")
                 for passenger_label in passenger_labels:
                     name = passenger_label.text
@@ -146,9 +166,9 @@ class Pc12306:
                 submitbtn.click()
 
                 # 信息确认
-                WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME,"dhtmlx_wins_body_outer")))
-                WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.ID,"qr_submit_id")))
-                WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.ID, "qr_submit_id")))
+                WebDriverWait(self.driver, 5, 0.5).until(EC.presence_of_element_located((By.CLASS_NAME,"dhtmlx_wins_body_outer")))
+                WebDriverWait(self.driver, 5, 0.5).until(EC.presence_of_element_located((By.ID,"qr_submit_id")))
+                WebDriverWait(self.driver, 5, 0.5).until(EC.element_to_be_clickable((By.ID, "qr_submit_id")))
                 confirmbtn = self.driver.find_element(By.ID, "qr_submit_id")
                 confirmbtn.click()
                 try:
@@ -157,8 +177,7 @@ class Pc12306:
                         confirmbtn = self.driver.find_element(By.ID, "qr_submit_id")
                 except:
                     pass
-                logger.info('恭喜，抢票成功！请前往客户端确认订单')
-                self.user_info.trains.remove(train_number)
+                logger.info(f'恭喜，车次 {train_number} {self.user_info.trains.pop(train_number)}抢票成功！请前往客户端确认订单')
                 
         return False
 
@@ -176,7 +195,7 @@ class Pc12306:
             tr_list = self.info_select()
             if self.vote(tr_list):
                 break
-            time.sleep(2)
+            time.sleep(random.uniform(1, 2))
         time.sleep(10)
 
     def __del__(self):
